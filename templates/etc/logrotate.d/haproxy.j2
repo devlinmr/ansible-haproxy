@@ -1,0 +1,25 @@
+# {{ ansible_managed }}
+
+{{ haproxy_error_log }} {
+    missingok
+    notifempty
+    sharedscripts
+    rotate 30
+    daily
+    compress
+    postrotate
+        reload rsyslog >/dev/null 2>&1 || true
+    endscript
+}
+
+{{ haproxy_status_log }} {
+    missingok
+    notifempty
+    sharedscripts
+    rotate 30
+    daily
+    compress
+    postrotate
+        reload rsyslog >/dev/null 2>&1 || true
+    endscript
+}

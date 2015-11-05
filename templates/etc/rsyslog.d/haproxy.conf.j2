@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+
+$ModLoad imudp
+$UDPServerRun {{ syslog_port }}
+$template Haproxy,"%msg%\n"
+{{ syslog_facility }}.=info -{{ haproxy_error_log }};Haproxy
+{{ syslog_facility }}.notice -{{ haproxy_status_log }};Haproxy
+### keep logs in localhost ##
+{{ syslog_facility }}.* ~ 

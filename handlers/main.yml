@@ -1,0 +1,13 @@
+---
+
+###################################################################################################
+
+- name    : haproxy | restart
+  service : name={{ haproxy_service }} state=restarted
+
+  when    : haproxy_enabled == true
+
+###################################################################################################
+
+- name    : syslog | restart
+  service : name={{ syslog_service }} state=restarted

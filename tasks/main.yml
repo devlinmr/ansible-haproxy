@@ -1,0 +1,249 @@
+---
+
+###################################################################################################
+
+### SSL Bits ######################################################################################
+
+- name: main | create ssl dir
+
+  file: path={{ haproxy_ssl_dir }}
+       state=directory
+       owner={{ haproxy_security_runtime_user }}
+       group={{ haproxy_security_runtime_group }}
+        mode=0750
+
+  tags: 
+    - haproxy
+
+###################################################################################################
+
+- name: main | create ssl dirs
+
+  file: path={{ item }}
+       state=directory
+       owner={{ haproxy_security_runtime_user }}
+       group={{ haproxy_security_runtime_group }}
+        mode=0750
+
+  with_items:
+    - "{{ haproxy_ssl_keyfile_dir }}"
+    - "{{ haproxy_ssl_crtfile_dir }}"
+    - "{{ haproxy_ssl_pemfile_dir }}"
+
+  tags: 
+    - haproxy
+
+###################################################################################################
+
+- name: main | create self-signed ssl cert
+
+  command: openssl req -nodes -newkey rsa:2048 -sha256 -new -x509 -subj "/C=UK/L=Northampton/O=TPPLC/OU=CloudShop/CN={{ item.ssl_cn }}" -days 3650 -keyout {{ haproxy_ssl_keyfile_dir }}/{{ item.ssl_keyfile }} -out {{ haproxy_ssl_crtfile_dir }}/{{ item.ssl_crtfile }} -extensions v3_ca creates={{ haproxy_ssl_keyfile_dir }}/{{ item.ssl_keyfile }}
+
+  register: new_self_signed
+
+  with_items: haproxy_clusters.values()
+
+  when: haproxy_ssl_enable == true and self_signed_ssl == true and item.ssl_cn is defined
+
+  tags: 
+    - haproxy
+
+#### private key ##################################################################################
+
+- name: main | template ssl private key file
+
+  template: src=etc/haproxy/ssl/ssl.key/ssl_keyfile.j2
+           dest={{ haproxy_ssl_keyfile_dir }}/{{ item.ssl_keyfile }}
+          owner={{ haproxy_security_runtime_user }}
+          group={{ haproxy_security_runtime_group }}
+           mode=0400
+
+  register: new_key
+
+  with_items: haproxy_clusters.values()
+
+  when: item.ssl_key is defined
+        and haproxy_ssl_enable == true
+        and self_signed_ssl == false
+
+  tags: 
+    - haproxy
+
+#### public key ##################################################################################
+
+- name: main | template ssl public key file
+
+  template: src=etc/haproxy/ssl/ssl.crt/ssl_crtfile.j2
+           dest={{ haproxy_ssl_crtfile_dir }}/{{ item.ssl_crtfile }}
+          owner={{ haproxy_security_runtime_user }}
+          group={{ haproxy_security_runtime_group }}
+           mode=0400
+
+  register: new_crt
+
+  with_items: haproxy_clusters.values()
+
+  when: item.ssl_crt is defined
+        and haproxy_ssl_enable == true
+        and self_signed_ssl == false
+
+  tags: 
+    - haproxy
+
+#### pem file ####################################################################################
+
+- name: main | template ssl pem file
+
+  template: src=etc/haproxy/ssl/ssl.pem/ssl_pemfile.j2
+           dest={{ haproxy_ssl_pemfile_dir }}/{{ item.ssl_pemfile }}
+          owner={{ haproxy_security_runtime_user }}
+          group={{ haproxy_security_runtime_group }}
+           mode=0400
+
+  with_items: haproxy_clusters.values()
+
+  when: item.ssl_pem is defined
+        and haproxy_ssl_enable == true
+        and self_signed_ssl == false
+
+  tags: 
+    - haproxy
+
+###################################################################################################
+
+- name: main | combine self-signed cert and key into a single file for haproxy
+
+  shell: cat {{ haproxy_ssl_keyfile_dir }}/{{ item.ssl_keyfile }} {{ haproxy_ssl_crtfile_dir }}/{{ item.ssl_crtfile }} > {{ haproxy_ssl_pemfile_dir }}/{{ item.ssl_pemfile }}
+
+  with_items: haproxy_clusters.values()
+
+  when: item.ssl_cn is defined
+        and (new_self_signed.changed
+        or new_key.changed
+        or new_crt.changed)
+
+  tags: 
+    - haproxy
+
+### private key ###################################################################################
+
+- name: main | secure ssl private key file
+
+  file: path={{ haproxy_ssl_keyfile_dir }}/{{ item.ssl_keyfile }} 
+       owner={{ haproxy_security_runtime_user }}
+       group={{ haproxy_security_runtime_group }}
+        mode=0400
+       state=file
+
+  with_items: haproxy_clusters.values()
+
+  when: item.ssl_cn is defined and haproxy_ssl_enable == true
+
+  tags: 
+    - haproxy
+
+###################################################################################################
+
+- name: main | secure ssl pem file
+
+  file: path={{ haproxy_ssl_pemfile_dir }}/{{ item.ssl_pemfile }} 
+       owner={{ haproxy_security_runtime_user }}
+       group={{ haproxy_security_runtime_group }}
+        mode=0400
+        state=file
+
+  with_items: haproxy_clusters.values()
+
+  when: item.ssl_cn is defined and haproxy_ssl_enable == true
+
+  tags: 
+    - haproxy
+
+## jail dir #######################################################################################
+
+- name: main | create runtime chroot jail
+
+  file: path={{ haproxy_lib_dir }} 
+       owner={{ haproxy_security_runtime_user }}
+       group={{ haproxy_security_runtime_group }}
+        mode=0500
+       state=directory
+
+  tags: 
+    - haproxy
+
+#### init.d #######################################################################################
+
+- name: init.d
+
+  template: src=etc/init.d/haproxy.j2
+
+           dest=/etc/init.d/haproxy
+          owner=root
+          group={{ haproxy_security_runtime_group }}
+           mode=0750
+
+  when: haproxy_enabled and keepalived_haproxy
+
+  tags: 
+    - haproxy
+
+#### configuration file ###########################################################################
+
+- name: main | configure
+
+  template: src=etc/haproxy/haproxy.cfg.j2
+           dest={{ haproxy_conf_dir }}/haproxy.cfg
+          owner={{ haproxy_security_runtime_user }}
+          group={{ haproxy_security_runtime_group }}
+           mode=0640
+
+  register: haproxy_cfg
+
+  tags: 
+    - haproxy
+
+### syslog ########################################################################################
+
+- name: main | syslog
+
+  template: src=etc/rsyslog.d/haproxy.conf.j2
+           dest={{ syslog_dir }}/haproxy.conf
+          owner=root
+          group={{ haproxy_security_runtime_group }}
+           mode=0640
+
+  notify: syslog | restart
+
+  tags: 
+    - haproxy
+
+### logrotate #####################################################################################
+
+- name: main | logrotate
+
+  template: src=etc/logrotate.d/haproxy.j2
+           dest=/etc/logrotate.d/haproxy
+          owner=root
+          group={{ haproxy_security_runtime_group }}
+           mode=0640
+
+  tags: 
+    - haproxy
+
+### service #######################################################################################
+
+- name: restart haproxy
+
+  service: name={{ haproxy_service }}
+          state={% if haproxy_enabled %}restarted{% else %}stopped{% endif %}
+        enabled={{ haproxy_enabled }}
+  when: haproxy_cfg.changed
+        or new_self_signed.changed
+        or new_key.changed
+        or new_crt.changed
+
+  tags: 
+    - haproxy
+
+###################################################################################################

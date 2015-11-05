@@ -1,0 +1,99 @@
+# {{ ansible_managed }}
+
+global
+    log         {{ syslog_host }} {{ syslog_facility }}
+
+    chroot      {{ haproxy_lib_dir }}
+    pidfile     {{ haproxy_run_dir }}/haproxy.pid
+    maxconn     {{ haproxy_maxconn }}
+    user        {{ haproxy_security_runtime_user }}
+    group       {{ haproxy_security_runtime_group }}
+    daemon
+
+    stats socket {{ haproxy_lib_dir }}/stats
+    tune.ssl.default-dh-param {{ haproxy_dh_param }}
+    ssl-server-verify {{ haproxy_ssl_server_verify }}
+
+defaults
+    log                     global
+    option                  redispatch
+    retries                 {{ haproxy_timeout_retries }}
+    timeout client          {{ haproxy_timeout_client }}s
+    timeout connect         {{ haproxy_timeout_connect }}s
+    timeout server          {{ haproxy_timeout_server }}s
+    maxconn                 {{ haproxy_maxconn }}
+
+    option                  httpclose
+    option                  dontlognull
+
+{% if haproxy_stats_enable == true %}
+    stats enable
+    stats uri /stats
+    stats realm Haproxy\ Statistics
+    stats auth {{ haproxy_stats_user }}:{{ haproxy_stats_pwd }}
+{% endif %}
+
+# Define frontend
+{% if haproxy_clusters is defined %}
+{% for clusters in haproxy_clusters.values() %}
+{% for item in clusters %}
+frontend {{ item.name | default('all-http-inbound') }}
+{% if item.mode == 'http' %}
+    mode http
+    option forwardfor
+    option httplog
+    option httpclose
+{% endif %}
+{% if item.timeout is defined %}
+    timeout client         {{ item.timeout | int + 1 }}s
+{% elif item.cc_site is defined and item.cc_site == true %}
+    timeout client         {{ haproxy_cc_timeout_client }}s
+{% endif %}
+    bind {{ item.bind | default('*:80') }}{% if item.ssl_crtfile is defined and haproxy_ssl_enable == true %} ssl crt {{ haproxy_ssl_pemfile_dir }}/{{ item.ssl_pemfile }} ciphers {{ haproxy_ciphers }} {{ haproxy_ssl_flags }}
+    mode http
+{% elif item.ssl_crtfile is defined and haproxy_ssl_enable == false  %}
+
+    mode tcp
+{% else %}
+
+    mode {{ item.mode | default('http') }}
+{% endif %}
+    acl is_{{ item.backend }} hdr_end(host) -i {{ item.url }}
+{% if item.ssl_cn is defined %}
+    reqadd X-Forwarded-Proto:\ https
+{% else %}
+    reqadd X-Forwarded-Proto:\ http
+{% endif %}
+    default_backend {{ item.backend | default('backend-servers')}}
+    use_backend {{ item.backend }} if is_{{ item.backend }}
+
+backend {{ item.backend | default('backend-servers')}}
+    balance {{ item.balancer | default('roundrobin') }}
+{% if haproxy_ssl_enable == true and item.ssl_crtfile is defined %}
+    mode http
+{% elif item.mode == 'http' %}
+    mode http    
+{% else %}
+    mode tcp
+{% endif %}
+{% if item.timeout is defined %}
+    timeout connect         {{ haproxy_cc_timeout_connect }}s
+    timeout server          {{ item.timeout | int + 1 }}s
+{% elif item.cc_site is defined and item.cc_site == true %}
+    timeout connect         {{ haproxy_cc_timeout_connect }}s
+    timeout server          {{ haproxy_cc_timeout_server }}s
+{% endif %}
+{% if item.httpchk is defined and haproxy_ssl_enable == true %}
+    option httpchk {{ item.httpchk }}
+{% endif %}
+{% set i = 1 %}
+{% if item.servers is defined %}
+{% for server in item.servers %}
+    server {{ item.name }}{{ i }}_{{ server.hostname }} {{ server.hostname }}:{{ server.port | default('80') }} check fall 2 rise 1
+{% set i = i + 1 %}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+{% endfor %}
+{% endif %}
